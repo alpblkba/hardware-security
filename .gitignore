@@ -1,0 +1,9 @@
+build/
+*.bin
+*.asc
+*.json
+*.rpt
+*.log
+__pycache__/
+*.pyc
+.DS_Store

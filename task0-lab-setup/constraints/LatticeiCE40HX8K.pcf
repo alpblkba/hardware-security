@@ -1,0 +1,23 @@
+# iCE40HX8K
+# CT256
+
+set_io CLK J3
+set_io LED[0] B5
+set_io LED[1] B4
+set_io LED[2] A2
+set_io LED[3] A1
+set_io LED[4] C5
+set_io LED[5] C4
+set_io LED[6] B3
+set_io LED[7] C3
+set_io UART_RX B10
+set_io UART_TX B12
+
+# reset FPGA from ftdi RTS
+set_io RST B13
+
+# ftdi CTS (to ftdi)
+# A15
+
+# ftdi DTR (from ftdi)
+# A16
