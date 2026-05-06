@@ -1,0 +1,50 @@
+Task 1 - SRAM PUF mental model and TODO
+
+Mental model:
+The FPGA SRAM/BRAM power-up state is used as a weak PUF.
+Some memory cells naturally power up as 0 or 1 due to physical manufacturing variation.
+The task is to read this uninitialized memory before it gets overwritten, send it to the PC over UART, and evaluate how useful it is as a PUF.
+
+Data model:
+- one line in puf_data.txt = one 256-bit PUF instance
+- 512 lines = 512 PUF instances simulated from one FPGA memory space
+- multiple files after power-cycles = repeated readings of the same PUF instances
+- same line number across files = same PUF instance across different power-ups
+
+Hardware TODO:
+[ ] inspect puf_module.v and find all TODO items
+[ ] complete TODO-BASIC initialization items
+[ ] make UART transmit dummy data first
+[ ] verify UART output has no repeated/zero bytes at start or end
+[ ] connect combined_ram.v / SRAM readout path
+[ ] send actual SRAM/BRAM contents over UART
+[ ] confirm received file shape: 512 lines, each 64 hex chars = 256 bits
+[ ] adjust Makefile icepack rule to avoid BRAM initialization to zero
+[ ] build bitstream with make
+[ ] program board SRAM for quick tests
+[ ] program board flash for repeated power-cycle measurements
+
+Software / measurement TODO:
+[ ] run get_puf_from_device.py and capture one test file
+[ ] compare against example puf_data files for sanity
+[ ] collect around 20 files with board power-cycles between measurements
+[ ] keep filenames organized, e.g. measurements/puf_data_00.txt ... puf_data_19.txt
+
+Statistics TODO:
+[ ] write/read analysis script, preferably Python
+[ ] parse each line as 256 individual bits, not just bytes
+[ ] compute Uniformity
+[ ] compute Bit-aliasing
+[ ] compute Uniqueness
+[ ] compute Reliability
+[ ] output detailed per-instance/per-bit/per-pair results where relevant
+[ ] output average values for all four metrics
+[ ] compare results with expected ideal values from the PUF evaluation paper/table
+
+Submission TODO:
+[ ] include final hardware source files
+[ ] include final software/statistics source files
+[ ] include collected PUF data files or representative final data
+[ ] include average metric results
+[ ] include detailed metric results
+[ ] be ready to explain every implemented step in the meeting
