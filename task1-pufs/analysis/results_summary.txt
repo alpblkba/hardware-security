@@ -1,0 +1,43 @@
+SRAM PUF statistics summary
+
+Input directory: measurements
+Files used: 20
+Devices/PUF instances per file: 512
+Bits per PUF instance: 256
+
+Files:
+  - measurements/puf_data_00.txt
+  - measurements/puf_data_01.txt
+  - measurements/puf_data_02.txt
+  - measurements/puf_data_03.txt
+  - measurements/puf_data_04.txt
+  - measurements/puf_data_05.txt
+  - measurements/puf_data_06.txt
+  - measurements/puf_data_07.txt
+  - measurements/puf_data_08.txt
+  - measurements/puf_data_09.txt
+  - measurements/puf_data_10.txt
+  - measurements/puf_data_11.txt
+  - measurements/puf_data_12.txt
+  - measurements/puf_data_13.txt
+  - measurements/puf_data_14.txt
+  - measurements/puf_data_15.txt
+  - measurements/puf_data_16.txt
+  - measurements/puf_data_17.txt
+  - measurements/puf_data_18.txt
+  - measurements/puf_data_19.txt
+
+Average metrics:
+  Uniformity:    50.4736 %
+  Bit-aliasing:  50.4736 %
+  Uniqueness:    49.7152 %
+  Reliability:   95.9337 %
+
+Additional reliability view:
+  Average intra-device Hamming distance: 4.0663 %
+
+Ideal reference values:
+  Uniformity:    50 %
+  Bit-aliasing:  50 %
+  Uniqueness:    50 %
+  Reliability:   100 %
