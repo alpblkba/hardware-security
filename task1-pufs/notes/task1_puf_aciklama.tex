@@ -1,0 +1,553 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[a4paper,margin=2.35cm]{geometry}
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage{turkish}
+\setotherlanguage{english}
+\setmainfont{DejaVu Serif}
+\setsansfont{DejaVu Sans}
+\setmonofont{DejaVu Sans Mono}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{microtype}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  urlcolor=blue!50!black,
+  citecolor=blue!50!black,
+  pdftitle={Task 1 SRAM PUF puf\_module.v Aciklamasi},
+  pdfauthor={Alp Bolukbasi - calisma notu}
+}
+
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{codeframe}{RGB}{220,220,220}
+\definecolor{keyword}{RGB}{0,70,140}
+\definecolor{comment}{RGB}{90,110,90}
+\definecolor{string}{RGB}{130,60,30}
+
+\lstdefinestyle{verilogstyle}{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  keywordstyle=\color{keyword}\bfseries,
+  commentstyle=\color{comment},
+  stringstyle=\color{string},
+  morekeywords={module,input,output,wire,reg,always,begin,end,if,else,case,endcase,localparam,parameter,assign,posedge,negedge,default,function,endfunction,integer,initial},
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/}
+}
+
+\lstdefinestyle{bashstyle}{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false
+}
+
+\titleformat{\section}{\Large\bfseries\sffamily}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\large\bfseries\sffamily}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\sffamily}{\thesubsubsection}{0.6em}{}
+\setlist[itemize]{topsep=0.25em,itemsep=0.15em}
+\setlist[enumerate]{topsep=0.25em,itemsep=0.15em}
+
+\setlength{\headheight}{14pt}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{Task 1 - SRAM PUF}
+\rhead{puf\_module.v aciklamasi}
+\cfoot{\thepage}
+
+\title{\textbf{Task 1 SRAM PUF Tasarimi: \texttt{puf\_module.v} Teknik Aciklamasi}}
+\author{Calisma ve savunma notu}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Bu dokuman, Hardware Security Task 1 kapsaminda gelistirilen \texttt{puf\_module.v} cozumunu, bir TA'ya anlatir gibi ama teknik detaylari kaybetmeden aciklar. Odak noktasi, SRAM/BRAM tabanli PUF verisinin \texttt{combined\_ram} uzerinden okunmasi, 16-bit RAM word'lerinin 8-bit UART byte'larina bolunmesi, FSM ile bu aktarimin kontrol edilmesi ve UART handshake'inin dogru kurulmasidir. Dokuman ayrica debug amaciyla eklenen writeback ve diagnostic mode fikirlerini final PUF davranisindan ayirir.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Genel Tasarim ve Moduller Arasi Iliski}
+
+\subsection{Buyuk resim}
+\texttt{puf\_module}, PC ile FPGA icindeki RAM altyapisi arasinda duran kucuk bir kontrolcudur. Modulu tek basina bir PUF hesaplayicisi gibi dusunmek dogru degildir. Asil gorevi, FPGA icindeki SRAM/BRAM power-up icerigini bozmadan okumaya calismak ve bunu UART uzerinden PC'ye byte stream olarak gondermektir.
+
+\begin{center}
+\begin{tabular}{c c c c c}
+PC Python script & $\longleftrightarrow$ & UART & $\longleftrightarrow$ & \texttt{puf\_module FSM} $\longleftrightarrow$ \texttt{combined\_ram} \\
+\end{tabular}
+\end{center}
+
+Normal akis soyledir:
+\begin{enumerate}
+  \item PC, UART uzerinden \texttt{s} veya \texttt{S} komutunu gonderir.
+  \item \texttt{puf\_module}, UART RX tarafindan bu komutu gorur.
+  \item FSM, \texttt{combined\_ram} adres alanini bastan sona okur.
+  \item RAM 16-bit word dondurdugu icin her word iki adet 8-bit UART byte'ina bolunur.
+  \item UART TX bu byte'lari PC'ye yollar.
+  \item Python script toplam 16384 byte'i 512 satir, satir basina 64 hex karakter olarak dosyaya yazar.
+\end{enumerate}
+
+Bu tasarimda final hedef sudur:
+\begin{lstlisting}[style=bashstyle]
+512 PUF instance * 256 bit = 131072 bit = 16384 byte = 16 KiB
+\end{lstlisting}
+
+\subsection{Portlar: dis dunya ile konusulan sinyaller}
+\texttt{puf\_module} portlari iki gruba ayrilabilir: clock/reset ve UART arayuzu.
+
+\begin{lstlisting}[style=verilogstyle]
+input  clk,
+input  rst,
+input  uart_rx_ready,
+input  [7:0] uart_data_from_rx,
+input  uart_tx_ready,
+output [7:0] uart_data_to_tx,
+output uart_tx_enable
+\end{lstlisting}
+
+\begin{longtable}{>{\ttfamily}p{4.2cm}p{10.4cm}}
+\toprule
+Sinyal & Anlam \\
+\midrule
+\endhead
+clk & Sequential FSM'in ilerledigi ana clock. \\
+rst & FSM ve ic register'lari bilinen duruma donduren reset. RAM icerigini sifirlamaz. \\
+uart\_rx\_ready & PC'den yeni bir UART byte'i geldigini bildirir. \\
+uart\_data\_from\_rx & RX tarafindan yakalanmis komut byte'i. \texttt{s/S} normal PUF dump, \texttt{d/D} debug dump. \\
+uart\_tx\_ready & UART TX'in yeni byte kabul etmeye hazir oldugunu bildirir. \\
+uart\_data\_to\_tx & UART'a verilecek 8-bit byte. Genelde \texttt{puf\_byte\_reg}'den gelir. \\
+uart\_tx\_enable & UART'a ``su byte'i al ve gonder'' diyen bir-cycle pulse. \\
+\bottomrule
+\end{longtable}
+
+\subsection{RAM arayuzu ve \texttt{combined\_ram}}
+\texttt{puf\_module}, fiziksel RAM bloklarini dogrudan yonetmez. Bunun yerine saglanan \texttt{combined\_ram} wrapper'ina baglanir:
+
+\begin{lstlisting}[style=verilogstyle]
+combined_ram ram_inst (
+   .clk   ( clk ),
+   .rdata ( rdata ),
+   .raddr ( raddr ),
+   .we    ( we ),
+   .wdata ( wdata ),
+   .wmask ( wmask ),
+   .waddr ( waddr )
+);
+\end{lstlisting}
+
+Bu wrapper, cok sayida fiziksel \texttt{SB\_RAM40\_4K} RAM blogunu tek buyuk adres alani gibi gostermeyi amaclar. \texttt{puf\_module} acisindan interface soyledir:
+
+\begin{lstlisting}[style=verilogstyle]
+wire [15:0] rdata;
+reg  [12:0] raddr;
+reg  [12:0] waddr;
+reg  [15:0] wmask;
+reg         we;
+reg  [15:0] wdata;
+\end{lstlisting}
+
+\texttt{rdata}, \texttt{combined\_ram}'den gelen 16-bit output'tur. \texttt{raddr} 13-bit read address'tir. 13-bit adres alani su anlama gelir:
+
+\begin{lstlisting}[style=bashstyle]
+2^13 = 8192 word
+8192 word * 16 bit = 131072 bit = 16 KiB
+\end{lstlisting}
+
+\texttt{combined\_ram} icinde adres iki parcaya ayrilir:
+\begin{lstlisting}[style=verilogstyle]
+raddr[12:8]  // hangi RAM block?
+raddr[7:0]   // o block icindeki local word offset
+\end{lstlisting}
+
+\texttt{puf\_module} seviyesinde ise bu detay soyutlanmistir. Biz sadece \texttt{raddr=0..8191} arasinda gezeriz ve her adreste 16-bit \texttt{rdata} bekleriz.
+
+\subsection{Byte index mental modeli: \texttt{i\_r}, \texttt{raddr}, \texttt{rdata}}
+RAM 16-bit word dondurur, UART ise 8-bit byte gonderir. Bu yuzden tek bir sayaç hem RAM adresini hem de byte secimini belirler:
+
+\begin{lstlisting}[style=verilogstyle]
+raddr = i_r[13:1];
+\end{lstlisting}
+
+\begin{center}
+\begin{tabular}{ccc}
+\toprule
+\texttt{i\_r} byte index & \texttt{raddr} word address & Gonderilecek byte \\
+\midrule
+0 & 0 & \texttt{rdata[7:0]} \\
+1 & 0 & \texttt{rdata[15:8]} \\
+2 & 1 & \texttt{rdata[7:0]} \\
+3 & 1 & \texttt{rdata[15:8]} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Buradaki en onemli cumle sudur:
+
+\begin{quote}
+\texttt{i\_r} UART byte index'idir. \texttt{i\_r[13:1]} RAM word adresi olur, \texttt{i\_r[0]} ise 16-bit word icindeki lower veya upper byte secimini yapar.
+\end{quote}
+
+\subsection{State tanimlari ve \texttt{localparam}}
+FSM state'leri \texttt{localparam} ile isimlendirilir:
+
+\begin{lstlisting}[style=verilogstyle]
+localparam
+   INIT = 0,
+   WAIT_FOR_REQUEST = 1,
+   WAITCYCLE_FOR_MEMORY = 2,
+   PUF_READ = 3,
+   UART_SEND = 4,
+   UART_WAIT_FINISH = 5,
+   LOOP_CONDITION = 6;
+
+reg [2:0] state;
+\end{lstlisting}
+
+7 state oldugu icin 3-bit \texttt{state} yeterlidir. \texttt{localparam} kullanmak, \texttt{state <= 3;} gibi okunmasi zor kod yerine \texttt{state <= PUF\_READ;} yazmayi saglar.
+
+\begin{longtable}{>{\ttfamily}p{4.7cm}p{9.9cm}}
+\toprule
+State & Gorev \\
+\midrule
+\endhead
+INIT & Reset sonrasi baslangic ve dummy UART davranisi. \\
+WAIT\_FOR\_REQUEST & PC'den \texttt{s/S} veya \texttt{d/D} bekler. \\
+WAITCYCLE\_FOR\_MEMORY & RAM adresinin oturmasi / synchronous RAM latency icin ara state. \\
+PUF\_READ & \texttt{rdata}'dan dogru byte'i secip \texttt{puf\_byte\_reg}'e yazar. \\
+UART\_SEND & UART'a bir cycle \texttt{uart\_tx\_enable} pulse verir. \\
+UART\_WAIT\_FINISH & UART byte gonderimini bitirene kadar bekler. \\
+LOOP\_CONDITION & Sayaç artirir veya transfer bittiyse idle state'e doner. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Register'lar ve initialization}
+FSM'in hafizasi su register'lardan olusur:
+
+\begin{lstlisting}[style=verilogstyle]
+reg [13:0] i_r;
+reg [12:0] i_w_r;
+reg [7:0]  puf_byte_reg;
+reg        debug_mode;
+\end{lstlisting}
+
+Reset sirasinda:
+\begin{lstlisting}[style=verilogstyle]
+state <= INIT;
+i_r <= 14'd0;
+i_w_r <= 13'd0;
+debug_mode <= 1'b0;
+puf_byte_reg <= 8'd0;
+\end{lstlisting}
+
+Bu initialization'lar RAM'i sifirlamak icin degildir. Sadece FSM ve kontrol register'larini bilinen duruma getirir. PUF mantigi acisindan kritik olan nokta sudur: RAM power-up icerigi korunmali ve okunmalidir; reset sadece kontrolcu tarafini temizlemelidir.
+
+\section{Sequential Logic: Clock Edge'de Ne Oluyor?}
+
+Sequential block su sekildedir:
+\begin{lstlisting}[style=verilogstyle]
+always @ (posedge clk, posedge rst) begin
+   ...
+end
+\end{lstlisting}
+
+Bu blok register update'lerini yapar. \texttt{state}, \texttt{i\_r}, \texttt{i\_w\_r}, \texttt{debug\_mode}, \texttt{puf\_byte\_reg} gibi degerler clock edge'lerinde guncellenir. Bu yuzden sequential block icinde genelde non-blocking assignment, yani \texttt{<=}, kullanilir.
+
+\subsection{Reset davranisi}
+Reset geldiginde FSM ve sayaçlar bilinen duruma doner:
+\begin{lstlisting}[style=verilogstyle]
+if (rst) begin
+   state <= INIT;
+   i_r <= 14'd0;
+   i_w_r <= 13'd0;
+   debug_mode <= 1'b0;
+   puf_byte_reg <= 8'd0;
+end
+\end{lstlisting}
+
+Bu davranis TA'ya soyle aciklanabilir:
+
+\begin{quote}
+Reset, PUF memory'yi initialize etmez. Sadece transfer FSM'ini ve internal control register'larini initialize eder. Boylece yeni request geldiginde capture bastan ve deterministic bir kontrol akisiyle baslar.
+\end{quote}
+
+\subsection{\texttt{INIT}}
+\texttt{INIT}, bir baslangic state'idir:
+\begin{lstlisting}[style=verilogstyle]
+INIT : begin
+   state <= WAIT_FOR_REQUEST;
+end
+\end{lstlisting}
+
+Sequential tarafta tek gorevi FSM'i request bekleme durumuna almaktir. Combinational tarafta ise dummy UART byte gonderme davranisi olabilir.
+
+\subsection{\texttt{WAIT\_FOR\_REQUEST}}
+Bu state idle durumudur. FSM burada PC'den komut bekler.
+
+\begin{lstlisting}[style=verilogstyle]
+i_r <= 14'd0;
+
+if (uart_rx_ready &&
+   (uart_data_from_rx == "s" || uart_data_from_rx == "S")) begin
+   debug_mode <= 1'b0;
+   state <= WAITCYCLE_FOR_MEMORY;
+end else if (uart_rx_ready &&
+   (uart_data_from_rx == "d" || uart_data_from_rx == "D")) begin
+   debug_mode <= 1'b1;
+   state <= WAITCYCLE_FOR_MEMORY;
+end
+\end{lstlisting}
+
+Burada \texttt{i\_r}'nin sifirlanmasi onemlidir. Her yeni capture RAM adres alaninin basindan baslamalidir. \texttt{s/S} normal PUF dump'i baslatir. \texttt{d/D} ise debug packet modunu baslatir.
+
+Debug icin eklenen \texttt{i\_w\_r} artirma davranisi, final PUF fikrinin parcasi degildir. Sadece RAM write/readback yolunu test etmeye yarayan gecici bir tekniktir.
+
+\subsection{\texttt{WAITCYCLE\_FOR\_MEMORY}}
+Bu state timing amaclidir:
+\begin{lstlisting}[style=verilogstyle]
+WAITCYCLE_FOR_MEMORY : begin
+   state <= PUF_READ;
+end
+\end{lstlisting}
+
+\texttt{raddr}, combinational logic tarafinda \texttt{i\_r[13:1]} olarak surulur. RAM synchronous oldugu icin, adresi verip ayni logical anda \texttt{rdata}'yi sample etmek risklidir. Bu state, RAM output'unun hazirlanmasi icin bir ara cycle saglar.
+
+\subsection{\texttt{PUF\_READ}}
+Bu state'te RAM'den gelen 16-bit \texttt{rdata}'dan bir byte secilir.
+
+\begin{lstlisting}[style=verilogstyle]
+if (i_r[0] == 1'b0) begin
+   puf_byte_reg <= rdata[7:0];
+end else begin
+   puf_byte_reg <= rdata[15:8];
+end
+\end{lstlisting}
+
+Secilen byte hemen UART'a verilmez. Once \texttt{puf\_byte\_reg} register'ina alinir. Bir sonraki state olan \texttt{UART\_SEND}, bu stable byte'i UART'a verir.
+
+Debug mode'da ise \texttt{rdata} yerine internal signal snapshot'lari ve marker byte'lari gonderilir:
+\begin{lstlisting}[style=verilogstyle]
+6'd0:  puf_byte_reg <= 8'h44; // 'D'
+6'd1:  puf_byte_reg <= 8'h42; // 'B'
+...
+6'd9:  puf_byte_reg <= rdata[7:0];
+6'd10: puf_byte_reg <= rdata[15:8];
+...
+\end{lstlisting}
+
+Bu sayede UART/FSM path'i ile RAM readout path'i birbirinden ayrilabilir.
+
+\subsection{\texttt{UART\_SEND}}
+Sequential block'ta:
+\begin{lstlisting}[style=verilogstyle]
+UART_SEND : begin
+   state <= UART_WAIT_FINISH;
+end
+\end{lstlisting}
+
+Bu state bir cycle suren pulse state'tir. Asil \texttt{uart\_tx\_enable} combinational block'ta bu state sirasinda 1 yapilir. Sequential block hemen \texttt{UART\_WAIT\_FINISH}'e gecisi planlar.
+
+\subsection{\texttt{UART\_WAIT\_FINISH}}
+\begin{lstlisting}[style=verilogstyle]
+UART_WAIT_FINISH : begin
+   if (uart_tx_ready) begin
+      state <= LOOP_CONDITION;
+   end
+end
+\end{lstlisting}
+
+UART fiziksel olarak yavas oldugu icin bir byte'in gonderimi bircok FPGA clock cycle'i surebilir. Bu state, UART'in tekrar hazir olmasini bekler. Bu olmazsa FSM byte'lari UART'in kabul edebileceginden hizli gonderir.
+
+\subsection{\texttt{LOOP\_CONDITION}}
+Bu state transferin devam edip etmeyecegine karar verir:
+\begin{lstlisting}[style=verilogstyle]
+if ((debug_mode && i_r == DEBUG_BYTES - 1) ||
+    (!debug_mode && i_r == PUF_BYTES - 1)) begin
+   debug_mode <= 1'b0;
+   state <= WAIT_FOR_REQUEST;
+end else begin
+   i_r <= i_r + 1'b1;
+   state <= WAITCYCLE_FOR_MEMORY;
+end
+\end{lstlisting}
+
+Normal mode'da \texttt{i\_r} 0'dan 16383'e gider. Debug mode'da daha kisa bir diagnostic packet gonderilir. Son byte gonderilince FSM tekrar \texttt{WAIT\_FOR\_REQUEST}'e doner.
+
+\section{Combinational Logic: Output ve Control Sinyalleri}
+
+Combinational block su sekildedir:
+\begin{lstlisting}[style=verilogstyle]
+always @ (*) begin
+   ...
+end
+\end{lstlisting}
+
+Bu blok clock beklemez. O anki \texttt{state}, counter'lar ve input'lara gore output/control sinyallerini hazirlar.
+
+\subsection{Default assignment felsefesi}
+Combinational block'un basinda safe default degerler verilir:
+\begin{lstlisting}[style=verilogstyle]
+uart_tx_enable <= 'b0;
+uart_data_to_tx = puf_byte_reg;
+raddr = i_r[13:1];
+wmask <= 0;
+waddr = 13'd0;
+wdata = 16'd0;
+we = 1'b0;
+\end{lstlisting}
+
+Bu default'lar latch cikmasini engeller ve sinyalleri guvenli durumda tutar. Mesela \texttt{we} default olarak 0 olmalidir; aksi halde RAM icerigi yanlislikla overwrite edilebilir.
+
+\subsection{UART output sinyalleri}
+\texttt{uart\_data\_to\_tx} normalde \texttt{puf\_byte\_reg}'e baglidir:
+\begin{lstlisting}[style=verilogstyle]
+uart_data_to_tx = puf_byte_reg;
+\end{lstlisting}
+
+\texttt{uart\_tx\_enable} default olarak 0'dir. Sadece \texttt{UART\_SEND} state'inde 1 yapilir:
+\begin{lstlisting}[style=verilogstyle]
+UART_SEND : begin
+   uart_tx_enable = 1'b1;
+end
+\end{lstlisting}
+
+Bu, UART icin bir-cycle transmit pulse anlamina gelir.
+
+\subsection{RAM read address}
+\begin{lstlisting}[style=verilogstyle]
+raddr = i_r[13:1];
+\end{lstlisting}
+
+Bu assignment surekli aktiftir. FSM \texttt{i\_r}'yi her byte sonrasinda artirdikca, \texttt{raddr} otomatik olarak dogru RAM word adresini gosterir. \texttt{i\_r[0]} ise lower/upper byte secimi icin sequential block'ta kullanilir.
+
+\subsection{RAM write sinyalleri ve debug writeback}
+Normal PUF readout read-only olmalidir. Bu nedenle default:
+\begin{lstlisting}[style=verilogstyle]
+we = 1'b0;
+waddr = 13'd0;
+wdata = 16'd0;
+wmask <= 0;
+\end{lstlisting}
+
+Debug writeback modunda, \texttt{WAIT\_FOR\_REQUEST} sirasinda RAM'e gorunur bir pattern yazmayi denedik:
+\begin{lstlisting}[style=verilogstyle]
+waddr = i_w_r;
+wdata = 16'hA5A5;
+we = 1'b1;
+\end{lstlisting}
+
+Bunun amaci final cozum degil, sadece \texttt{combined\_ram} write/read path'inin calisip calismadigini test etmektir.
+
+\subsection{State-by-state combinational behavior}
+\begin{itemize}
+  \item \texttt{INIT}: dummy byte gondermek icin \texttt{uart\_tx\_enable=1}, \texttt{uart\_data\_to\_tx=0}.
+  \item \texttt{WAIT\_FOR\_REQUEST}: normalde default'lar. Debug writeback aciksa \texttt{waddr/wdata/we} surulur.
+  \item \texttt{WAITCYCLE\_FOR\_MEMORY}: default'lar yeterlidir; \texttt{raddr} zaten \texttt{i\_r}'ye baglidir.
+  \item \texttt{PUF\_READ}: asıl byte sampling sequential block'ta yapilir; combinational tarafta default'lar yeterlidir.
+  \item \texttt{UART\_SEND}: \texttt{uart\_tx\_enable=1} pulse verilir.
+  \item \texttt{UART\_WAIT\_FINISH}: default'lar; enable tekrar 0 olur.
+  \item \texttt{LOOP\_CONDITION}: karar sequential block'ta verilir; combinational tarafta default'lar.
+\end{itemize}
+
+\section{PUF-UART Handshake ve Tam Transfer Akisi}
+
+\subsection{Request handshake}
+Python script UART uzerinden komut byte'i yollar. FPGA tarafinda \texttt{uart\_rx\_ready} 1 oldugunda \texttt{uart\_data\_from\_rx} gecerli kabul edilir. FSM sadece \texttt{WAIT\_FOR\_REQUEST} state'inde bu komutu dikkate alir.
+
+\begin{lstlisting}[style=verilogstyle]
+if (uart_rx_ready && uart_data_from_rx == "s") begin
+   debug_mode <= 1'b0;
+   state <= WAITCYCLE_FOR_MEMORY;
+end
+\end{lstlisting}
+
+Burada request, tum transferi baslatan tetiktir.
+
+\subsection{RAM'den byte hazirlama}
+Request geldikten sonra \texttt{i\_r=0} iken \texttt{raddr=0} olur. \texttt{WAITCYCLE\_FOR\_MEMORY} sonrasinda \texttt{PUF\_READ} state'i \texttt{rdata}'nin lower veya upper byte'ini \texttt{puf\_byte\_reg}'e alir.
+
+\begin{lstlisting}[style=verilogstyle]
+RAM rdata[15:0] -> puf_byte_reg[7:0] -> uart_data_to_tx[7:0]
+\end{lstlisting}
+
+\texttt{puf\_byte\_reg}, RAM ile UART arasinda stable bir byte buffer'i gibi davranir.
+
+\subsection{UART TX handshake}
+UART TX modeli soyledir:
+\begin{enumerate}
+  \item \texttt{uart\_tx\_ready=1} ise UART yeni byte kabul edebilir.
+  \item \texttt{uart\_data\_to\_tx} stable tutulur.
+  \item \texttt{uart\_tx\_enable} bir cycle 1 yapilir.
+  \item UART byte'i alir ve fiziksel olarak serial hatta gondermeye baslar.
+  \item FSM \texttt{UART\_WAIT\_FINISH}'te \texttt{uart\_tx\_ready}'nin tekrar 1 olmasini bekler.
+\end{enumerate}
+
+Bu handshake olmadan FSM, UART'in kaldirabileceginden daha hizli byte gonderebilir.
+
+\subsection{Bir byte icin timing}
+Bir byte'in tam akisi soyledir:
+
+\begin{longtable}{p{3cm}p{11.4cm}}
+\toprule
+Asama & Olay \\
+\midrule
+\endhead
+\texttt{WAITCYCLE\_FOR\_MEMORY} & \texttt{raddr = i\_r[13:1]} RAM tarafinda stable hale gelir. \\
+\texttt{PUF\_READ} & \texttt{rdata}'dan lower/upper byte secilip \texttt{puf\_byte\_reg}'e yazilir. \\
+\texttt{UART\_SEND} & \texttt{uart\_data\_to\_tx = puf\_byte\_reg}; \texttt{uart\_tx\_enable=1}. \\
+\texttt{UART\_WAIT\_FINISH} & UART busy iken beklenir; \texttt{uart\_tx\_ready} tekrar 1 olunca devam edilir. \\
+\texttt{LOOP\_CONDITION} & \texttt{i\_r} artirilir veya transfer bittiyse idle'a donulur. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Debug packet ve stream alignment problemi}
+Debug icin \texttt{d/D} komutuyla marker byte'lari gonderildi:
+\begin{lstlisting}[style=bashstyle]
+44 42 = 'D' 'B'
+A5 5A C3 3C = bilinen marker pattern
+\end{lstlisting}
+
+Bu marker'larin amaci, UART/FSM path'inin calistigini ve stream icindeki hizalanma problemlerini gormektir. 16 KiB debug capture'da once uzun \texttt{00} bolgesi, sonra \texttt{44 42}, sonra \texttt{EE} default byte'lari gorulmesi su hipotezi dogurdu:
+
+\begin{itemize}
+  \item Python read window'u FPGA stream baslangicina tam hizali olmayabilir.
+  \item Reset/dummy/stale byte'lar stream basinda yer kapliyor olabilir.
+  \item Debug packet geliyor, fakat stream icinde offsetli geliyor olabilir.
+\end{itemize}
+
+Normal PUF capture'da ``ilk nonzero'dan basla'' gibi bir strateji dogru degildir; cunku gercek PUF verisi \texttt{00} ile baslayabilir. Ancak debug modunda bilincli \texttt{44 42} marker'i oldugu icin marker aramak ve packet'i onun etrafinda analiz etmek mantiklidir.
+
+\section{Sonuc ve TA'ya Anlatim Ozeti}
+
+Bu cozumde \texttt{puf\_module}, UART komutuyla tetiklenen bir FSM olarak tasarlanmistir. \texttt{s/S} komutu normal PUF dump'i, \texttt{d/D} komutu diagnostic dump'i baslatir. RAM 16-bit word dondurdugu icin \texttt{i\_r} byte counter'i hem RAM word adresini hem de lower/upper byte secimini belirler. Secilen byte \texttt{puf\_byte\_reg}'e alinir, sonra UART TX handshake ile PC'ye gonderilir. Normal modda 16384 byte, yani 512 adet 256-bit PUF instance'i gonderilir.
+
+Kisa savunma cumlesi:
+
+\begin{quote}
+I implemented the FSM as a bridge between the combined SRAM/BRAM interface and the UART transmitter. The RAM side is word-oriented and returns 16-bit data, while the UART side is byte-oriented and requires a ready/enable handshake. Therefore, I use a byte counter \texttt{i\_r}; \texttt{i\_r[13:1]} addresses the RAM word and \texttt{i\_r[0]} selects the low or high byte. The selected byte is registered in \texttt{puf\_byte\_reg}, then transmitted only when \texttt{uart\_tx\_ready} is high. The FSM waits for the UART to finish before moving to the next byte. Debug modes were added only to distinguish UART/FSM problems from RAM readout issues.
+\end{quote}
+
+\end{document}

@@ -1,0 +1,633 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[a4paper,left=2.0cm,right=2.0cm,top=2.25cm,bottom=2.25cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{lmodern}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{microtype}
+\usepackage{amsmath}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  urlcolor=blue!50!black,
+  citecolor=blue!50!black,
+  pdftitle={Task 1 SRAM PUF puf_module.v Explanation},
+  pdfauthor={Alp Bolukbasi - study note}
+}
+
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{codeframe}{RGB}{220,220,220}
+\definecolor{keyword}{RGB}{0,70,140}
+\definecolor{comment}{RGB}{90,110,90}
+\definecolor{string}{RGB}{130,60,30}
+
+\lstdefinestyle{verilogstyle}{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  keywordstyle=\color{keyword}\bfseries,
+  commentstyle=\color{comment},
+  stringstyle=\color{string},
+  morekeywords={module,input,output,wire,reg,always,begin,end,if,else,case,endcase,localparam,parameter,assign,posedge,negedge,default,function,endfunction,integer,initial},
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/}
+}
+
+\lstdefinestyle{bashstyle}{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false
+}
+
+\titleformat{\section}{\Large\bfseries\sffamily}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\large\bfseries\sffamily}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\sffamily}{\thesubsubsection}{0.6em}{}
+\setlist[itemize]{topsep=0.25em,itemsep=0.15em}
+\setlist[enumerate]{topsep=0.25em,itemsep=0.15em}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\setlength{\headheight}{14pt}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{Task 1 - SRAM PUF}
+\rhead{puf\_module.v explanation}
+\cfoot{\thepage}
+
+\title{\textbf{Task 1 SRAM PUF Design: Technical Explanation of \texttt{puf\_module.v}}}
+\author{Study and defense note}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Scope and High-Level Architecture}
+
+This document explains the logic of the Task 1 SRAM PUF design from the point of view of the \texttt{puf\_module.v} controller. The goal is not to compute a PUF value in software, but to read the power-up contents of SRAM/BRAM, transmit them to a PC over UART, and later evaluate the collected data statistically.
+
+At the architectural level, the design connects three components:
+
+\begin{center}
+\begin{tabular}{c c c c c}
+PC script & $\longleftrightarrow$ & UART & $\longleftrightarrow$ & \texttt{puf\_module} FSM $\longleftrightarrow$ \texttt{combined\_ram} / BRAM
+\end{tabular}
+\end{center}
+
+The Python script sends a one-byte request over UART. The FPGA receives this request, starts an FSM-controlled memory readout, and returns a byte stream. In normal mode, the request byte is \texttt{s} or \texttt{S}; in temporary debug mode, \texttt{d} or \texttt{D} can be used to return diagnostic bytes.
+
+The normal design target is:
+
+\begin{itemize}
+  \item read the 16 KiB memory space exposed through \texttt{combined\_ram};
+  \item treat the RAM output as 16-bit words;
+  \item split each 16-bit word into two 8-bit UART bytes;
+  \item send 16384 bytes to the PC;
+  \item save this as 512 lines, where each line contains 64 hexadecimal characters, corresponding to one 256-bit PUF instance.
+\end{itemize}
+
+Thus, \texttt{puf\_module} can be understood as a small data mover: it bridges a word-addressed memory interface and a byte-oriented UART interface.
+
+\section{Interface Signals and Module Responsibilities}
+
+\subsection{UART-facing signals}
+
+The module has the following UART-facing interface:
+
+\begin{lstlisting}[style=verilogstyle]
+input  uart_rx_ready,
+input  [7:0] uart_data_from_rx,
+input  uart_tx_ready,
+output [7:0] uart_data_to_tx,
+output uart_tx_enable
+\end{lstlisting}
+
+\texttt{uart\_rx\_ready} indicates that the UART RX module has received a valid byte from the PC. That byte is available on \texttt{uart\_data\_from\_rx}. In this design, the FSM waits for \texttt{s}/\texttt{S} to start a normal PUF readout, or \texttt{d}/\texttt{D} to start a temporary diagnostic packet.
+
+\texttt{uart\_tx\_ready} indicates that the UART TX module can accept a new byte. The FSM only starts a transmit operation when this signal is high.
+
+\texttt{uart\_data\_to\_tx} is the byte presented to the UART transmitter. \texttt{uart\_tx\_enable} is a one-cycle pulse telling the transmitter to accept and send that byte. In the final implementation, this enable pulse is generated as a registered sequential pulse rather than as a purely combinational state output. This prevents the transmitter from sampling the same byte more than once.
+
+\subsection{RAM-facing signals}
+
+The RAM interface consists of:
+
+\begin{lstlisting}[style=verilogstyle]
+wire [15:0] rdata;
+reg  [12:0] raddr;
+reg  [12:0] waddr;
+reg  [15:0] wmask;
+reg         we;
+reg  [15:0] wdata;
+\end{lstlisting}
+
+\texttt{rdata} is a 16-bit data word returned by \texttt{combined\_ram}. It is declared as a \texttt{wire} because it is driven by the RAM wrapper and observed by \texttt{puf\_module}. The read address \texttt{raddr} is 13 bits because the memory space contains 8192 16-bit words:
+
+\[
+8192 \times 16 \text{ bits} = 131072 \text{ bits} = 16384 \text{ bytes} = 16 \text{ KiB}.
+\]
+
+The write-side signals \texttt{waddr}, \texttt{wdata}, \texttt{wmask}, and \texttt{we} are normally inactive in the final PUF readout, because writing would destroy the power-up memory contents. They were only used in a temporary writeback experiment to test whether the RAM write/read path was alive. For the final PUF capture, this writeback path is disabled.
+
+\subsection{Connection to \texttt{combined\_ram}}
+
+The instance is conceptually simple:
+
+\begin{lstlisting}[style=verilogstyle]
+combined_ram ram_inst (
+   .clk   ( clk ),
+   .rdata ( rdata ),
+   .raddr ( raddr ),
+   .we    ( we ),
+   .wdata ( wdata ),
+   .wmask ( wmask ),
+   .waddr ( waddr )
+);
+\end{lstlisting}
+
+From the perspective of \texttt{puf\_module}, \texttt{combined\_ram} behaves like a single 8192-word memory. Internally, however, \texttt{combined\_ram} maps the address onto 32 physical \texttt{SB\_RAM40\_4K} blocks. The upper bits select the block, and the lower bits select the local word address:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Address field & Meaning & Example role \\
+\midrule
+\texttt{raddr[12:8]} & RAM block index & selects one of 32 blocks \\
+\texttt{raddr[7:0]} & local word offset & selects one word within the block \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The controller does not manually select individual physical RAMs. It simply drives \texttt{raddr} and observes \texttt{rdata}. The final design was also verified with the original \texttt{combined\_ram.v}; the functional fixes were made in \texttt{puf\_module.v}, not in the RAM wrapper.
+
+\section{Byte Indexing Model}
+
+A key design choice is to use \texttt{i\_r} as a byte index, while the RAM is word-addressed. Since the RAM returns 16-bit words and the UART sends 8-bit bytes, each RAM word must be split into two transmitted bytes.
+
+The relationship is:
+
+\begin{center}
+\begin{tabular}{ccc}
+\toprule
+Byte index \texttt{i\_r} & RAM word address \texttt{raddr} & Selected byte \\
+\midrule
+0 & 0 & \texttt{rdata[7:0]} \\
+1 & 0 & \texttt{rdata[15:8]} \\
+2 & 1 & \texttt{rdata[7:0]} \\
+3 & 1 & \texttt{rdata[15:8]} \\
+\vdots & \vdots & \vdots \\
+16382 & 8191 & \texttt{rdata[7:0]} \\
+16383 & 8191 & \texttt{rdata[15:8]} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+This is implemented by:
+
+\begin{lstlisting}[style=verilogstyle]
+raddr = i_r[13:1];
+\end{lstlisting}
+
+and by selecting the low or high byte using \texttt{i\_r[0]}:
+
+\begin{lstlisting}[style=verilogstyle]
+if (i_r[0] == 1'b0)
+   puf_byte_reg <= rdata[7:0];
+else
+   puf_byte_reg <= rdata[15:8];
+\end{lstlisting}
+
+A concise defense statement is:
+
+\begin{quote}
+I use \texttt{i\_r} as the UART byte index. Since the RAM is 16-bit word-addressed, \texttt{i\_r[13:1]} becomes the RAM word address, and \texttt{i\_r[0]} selects either the low or high byte from \texttt{rdata}.
+\end{quote}
+
+\section{State Encoding and Persistent Registers}
+
+The FSM states are defined with \texttt{localparam}:
+
+\begin{lstlisting}[style=verilogstyle]
+localparam
+   INIT = 0,
+   WAIT_FOR_REQUEST = 1,
+   WAITCYCLE_FOR_MEMORY = 2,
+   PUF_READ = 3,
+   UART_SEND = 4,
+   UART_WAIT_FINISH = 5,
+   LOOP_CONDITION = 6;
+
+reg [2:0] state;
+\end{lstlisting}
+
+\texttt{localparam} gives symbolic names to numeric state values. There are seven states, and therefore a three-bit register is sufficient, because three bits can represent eight values.
+
+The main persistent registers are:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Register & Purpose \\
+\midrule
+\texttt{state} & current FSM state \\
+\texttt{i\_r} & read byte index, normally 0 to 16383 \\
+\texttt{i\_w\_r} & temporary debug write address counter \\
+\texttt{puf\_byte\_reg} & stable one-byte UART transmit buffer \\
+\texttt{debug\_mode} & selects normal PUF stream or diagnostic stream \\
+\texttt{uart\_seen\_busy} & records that UART TX has entered busy state after a send pulse \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\texttt{puf\_byte\_reg} is especially important: it decouples the RAM output from the UART input. The FSM first captures a selected RAM byte into this register, and only in the next state does it pulse the UART transmit enable. This keeps the UART data stable during the transmit handshake.
+
+The final implementation also uses \texttt{uart\_seen\_busy} to make the UART transmit handshake more robust. During debugging, a repeated-byte problem was observed in which diagnostic marker bytes appeared as \texttt{44 44 42 42} instead of \texttt{44 42}. This showed that the transmitter could sample the enable condition more than once. The final design therefore treats \texttt{uart\_tx\_enable} as a registered one-clock pulse and waits until \texttt{uart\_tx\_ready} first goes low and then returns high before sending the next byte.
+
+\section{Initialization and Reset Behavior}
+
+The reset branch initializes the FSM and its internal control registers:
+
+\begin{lstlisting}[style=verilogstyle]
+state <= INIT;
+i_r <= 14'd0;
+i_w_r <= 13'd0;
+debug_mode <= 1'b0;
+uart_seen_busy <= 1'b0;
+uart_tx_enable <= 1'b0;
+puf_byte_reg <= 8'd0;
+\end{lstlisting}
+
+The reset does \emph{not} initialize the SRAM/BRAM contents. That distinction is essential: the task is based on reading the memory power-up state. Resetting the controller is allowed; overwriting the PUF memory is not.
+
+The intended meaning of each initialization is:
+
+\begin{itemize}
+  \item \texttt{state <= INIT}: start from the known first FSM state.
+  \item \texttt{i\_r <= 0}: begin every capture from byte index zero.
+  \item \texttt{i\_w\_r <= 0}: keep the temporary debug write counter deterministic.
+  \item \texttt{debug\_mode <= 0}: return to normal capture mode after reset.
+  \item \texttt{uart\_seen\_busy <= 0}: clear the UART busy-observation flag.
+  \item \texttt{uart\_tx\_enable <= 0}: ensure that no transmit pulse is active after reset.
+  \item \texttt{puf\_byte\_reg <= 0}: ensure the UART transmit buffer starts from a known value.
+\end{itemize}
+
+A useful explanation is:
+
+\begin{quote}
+Reset only initializes the controller. It does not intentionally initialize the PUF memory, because the memory power-up state is the object being measured.
+\end{quote}
+
+\section{Sequential Logic}
+
+The sequential block is sensitive to the positive clock edge and reset:
+
+\begin{lstlisting}[style=verilogstyle]
+always @ (posedge clk, posedge rst) begin
+   ...
+end
+\end{lstlisting}
+
+This block contains the FSM state transitions and all persistent register updates. Non-blocking assignments are used because all register updates should conceptually occur together on a clock edge.
+
+At the beginning of every non-reset cycle, the final implementation clears the registered transmit enable:
+
+\begin{lstlisting}[style=verilogstyle]
+uart_tx_enable <= 1'b0;
+\end{lstlisting}
+
+Only states that intentionally start a UART transmission override this default and assert \texttt{uart\_tx\_enable} for one clock cycle.
+
+\subsection{INIT}
+
+\texttt{INIT} is a short setup state. In the sequential block, it may generate one registered dummy transmit pulse and then transitions to \texttt{WAIT\_FOR\_REQUEST}. The dummy byte is not PUF data; it is only a startup/cleanup byte for the serial connection.
+
+\subsection{WAIT\_FOR\_REQUEST}
+
+In \texttt{WAIT\_FOR\_REQUEST}, the FSM remains idle until the UART RX side reports a received command byte. The read index is reset to zero so that every new capture starts from the beginning of memory.
+
+The request handling is:
+
+\begin{itemize}
+  \item \texttt{s}/\texttt{S}: start normal PUF dump;
+  \item \texttt{d}/\texttt{D}: start diagnostic packet mode.
+\end{itemize}
+
+Temporary debug writeback logic may also advance \texttt{i\_w\_r} while idle. This is not required by the final task; it is only a diagnostic method for testing the write/read path. In the final PUF measurement configuration, this writeback is disabled by setting \texttt{DEBUG\_TEST\_WRITEBACK = 1'b0}.
+
+\subsection{WAITCYCLE\_FOR\_MEMORY}
+
+This state is a timing spacer. The address \texttt{raddr} is driven from \texttt{i\_r} by combinational logic. Since the RAM primitive is clocked, the FSM waits before sampling \texttt{rdata}. The state therefore exists mainly to respect memory latency.
+
+\subsection{PUF\_READ}
+
+In this state, the FSM captures one byte into \texttt{puf\_byte\_reg}. In normal mode, the byte comes from \texttt{rdata}. In diagnostic mode, the byte comes from a debug case statement that returns known markers and selected internal signal values.
+
+After loading \texttt{puf\_byte\_reg}, the FSM checks \texttt{uart\_tx\_ready}. If the transmitter is ready, the FSM clears \texttt{uart\_seen\_busy} and proceeds to \texttt{UART\_SEND}.
+
+The timing is important:
+
+\begin{quote}
+At the clock edge in \texttt{PUF\_READ}, \texttt{puf\_byte\_reg} receives the selected byte. In the following state, \texttt{UART\_SEND}, this stable byte is presented to the UART transmitter.
+\end{quote}
+
+\subsection{UART\_SEND}
+
+\texttt{UART\_SEND} is a one-cycle transmit-pulse state. In the final implementation, \texttt{uart\_tx\_enable} is not generated as a purely combinational output. Instead, it is registered in the sequential FSM:
+
+\begin{lstlisting}[style=verilogstyle]
+UART_SEND :
+   begin
+      uart_tx_enable <= 1'b1;
+      state <= UART_WAIT_FINISH;
+   end
+\end{lstlisting}
+
+At the beginning of every non-reset clock cycle, the FSM assigns:
+
+\begin{lstlisting}[style=verilogstyle]
+uart_tx_enable <= 1'b0;
+\end{lstlisting}
+
+Thus, \texttt{uart\_tx\_enable} becomes a true one-clock pulse. This change was important in the final debugging process, because a combinational state-based enable caused diagnostic bytes to appear twice in the UART stream.
+
+\subsection{UART\_WAIT\_FINISH}
+
+After a transmit pulse, the UART needs many FPGA clock cycles to serialize the byte. A naive implementation would leave this state as soon as \texttt{uart\_tx\_ready} is high again. However, during debugging it was observed that \texttt{uart\_tx\_ready} may still be high immediately after the send pulse. If the FSM accepts that high value too early, it can move on before the UART has clearly entered its busy phase.
+
+Therefore, the final implementation uses a two-phase wait:
+
+\begin{enumerate}
+  \item first wait until \texttt{uart\_tx\_ready} becomes low, proving that the UART accepted the byte and entered busy state;
+  \item then wait until \texttt{uart\_tx\_ready} becomes high again, proving that the byte transmission has completed.
+\end{enumerate}
+
+This is implemented with \texttt{uart\_seen\_busy}:
+
+\begin{lstlisting}[style=verilogstyle]
+if (!uart_tx_ready) begin
+   uart_seen_busy <= 1'b1;
+end else if (uart_seen_busy) begin
+   uart_seen_busy <= 1'b0;
+   state <= LOOP_CONDITION;
+end
+\end{lstlisting}
+
+This prevents the FSM from launching the next byte too early.
+
+\subsection{LOOP\_CONDITION}
+
+This state decides whether the transfer is complete. In normal mode, the transfer ends after \texttt{PUF\_BYTES} bytes. The optional diagnostic mode can also stream data for debugging, but the RAM writeback path is disabled during final PUF measurements.
+
+If the transfer is not complete, \texttt{i\_r} is incremented and the FSM returns to \texttt{WAITCYCLE\_FOR\_MEMORY}. Thus, the main loop is:
+
+\begin{center}
+\texttt{WAITCYCLE\_FOR\_MEMORY -> PUF\_READ -> UART\_SEND -> UART\_WAIT\_FINISH -> LOOP\_CONDITION}
+\end{center}
+
+\section{Combinational Logic}
+
+The combinational block generates current-cycle control and output signals based on the current FSM state and register values:
+
+\begin{lstlisting}[style=verilogstyle]
+always @ (*) begin
+   ...
+end
+\end{lstlisting}
+
+The main principle is to assign safe defaults first and override them only in states that need special behavior.
+
+\subsection{Safe defaults}
+
+The default assignments are conceptually:
+
+\begin{lstlisting}[style=verilogstyle]
+uart_data_to_tx = puf_byte_reg;
+raddr = i_r[13:1];
+wmask = 0;
+waddr = 13'd0;
+wdata = 16'd0;
+we = 1'b0;
+\end{lstlisting}
+
+These defaults mean:
+
+\begin{itemize}
+  \item keep the UART data connected to the stable byte buffer;
+  \item continuously derive the RAM read address from the byte index;
+  \item do not write to RAM unless explicitly enabled for debugging.
+\end{itemize}
+
+In the final implementation, \texttt{uart\_tx\_enable} is deliberately excluded from the combinational defaults. It is generated as a registered one-clock pulse in the sequential FSM. This avoids repeated sampling of the same transmit byte by the UART module.
+
+\subsection{INIT combinational behavior}
+
+In \texttt{INIT}, the combinational block may still drive the dummy data byte:
+
+\begin{lstlisting}[style=verilogstyle]
+uart_data_to_tx = 8'h00;
+\end{lstlisting}
+
+However, the transmit enable itself is generated in the sequential \texttt{INIT} state as a registered pulse. This keeps the transmit-enable behavior consistent with the normal \texttt{UART\_SEND} state.
+
+\subsection{WAIT\_FOR\_REQUEST combinational behavior}
+
+In normal mode, \texttt{WAIT\_FOR\_REQUEST} keeps the safe defaults. In temporary debug writeback mode, it can drive:
+
+\begin{lstlisting}[style=verilogstyle]
+waddr = i_w_r;
+wdata = 16'hA5A5;
+we = 1'b1;
+\end{lstlisting}
+
+This is a diagnostic experiment. It attempts to overwrite RAM with a visible pattern before readout. If readback works, the output should contain \texttt{A5} bytes. If readback remains zero, the issue is likely in the RAM path or primitive behavior rather than in UART formatting. In the final PUF measurement configuration, this path must remain disabled.
+
+\subsection{WAITCYCLE\_FOR\_MEMORY and PUF\_READ}
+
+These states typically keep the defaults in the combinational block. \texttt{raddr} is already driven from \texttt{i\_r}, and the actual sampling of \texttt{rdata} happens in the sequential \texttt{PUF\_READ} state.
+
+\subsection{UART\_SEND}
+
+In the final implementation, \texttt{UART\_SEND} does not assert \texttt{uart\_tx\_enable} combinationally. The combinational block only keeps \texttt{uart\_data\_to\_tx} connected to \texttt{puf\_byte\_reg}. The actual one-clock transmit pulse is generated in the sequential FSM.
+
+\subsection{UART\_WAIT\_FINISH and LOOP\_CONDITION}
+
+These states keep the defaults. \texttt{UART\_WAIT\_FINISH} should not assert \texttt{uart\_tx\_enable}; it waits until the UART transmitter becomes busy and then ready again. \texttt{LOOP\_CONDITION} only updates counters and state in the sequential block.
+
+\section{PUF-UART Handshake in Detail}
+
+The complete normal transfer starts when the PC sends \texttt{s}. The UART RX module captures this byte, and \texttt{puf\_module} observes \texttt{uart\_rx\_ready} and \texttt{uart\_data\_from\_rx}. Once the command is recognized, the FSM begins the memory read loop.
+
+For each byte, the sequence is:
+
+\begin{enumerate}
+  \item \texttt{i\_r} determines the RAM word address through \texttt{raddr = i\_r[13:1]}.
+  \item The FSM waits one memory cycle.
+  \item In \texttt{PUF\_READ}, it selects either \texttt{rdata[7:0]} or \texttt{rdata[15:8]} and stores it in \texttt{puf\_byte\_reg}.
+  \item In \texttt{UART\_SEND}, \texttt{uart\_data\_to\_tx} is stable and a registered \texttt{uart\_tx\_enable} pulse is asserted for one clock cycle.
+  \item In \texttt{UART\_WAIT\_FINISH}, the FSM first waits for \texttt{uart\_tx\_ready} to go low, and then waits for it to return high.
+  \item In \texttt{LOOP\_CONDITION}, the FSM either increments \texttt{i\_r} and repeats, or returns to idle after the final byte.
+\end{enumerate}
+
+The transmit side is therefore a ready/enable handshake:
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{>{\hsize=0.95\hsize}Y >{\hsize=1.05\hsize}Y >{\hsize=1.00\hsize}Y}
+\toprule
+Condition & Action & Purpose \\
+\midrule
+\texttt{uart\_tx\_ready = 1} before send & enter \texttt{UART\_SEND} & transmitter can accept a byte \\
+\texttt{UART\_SEND} & registered one-clock \texttt{uart\_tx\_enable} pulse & start transmission \\
+\texttt{UART\_WAIT\_FINISH} & wait for ready low, then ready high & ensure byte was accepted and completed \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+This handshake is necessary because the FPGA clock is much faster than the UART baud rate. A byte cannot be sent on every clock cycle. The FSM must wait for the UART transmitter to finish serializing one byte before launching the next one.
+
+\section{Diagnostic Mode and Observed Debugging Interpretation}
+
+The temporary \texttt{d}/\texttt{D} request mode was introduced to distinguish between three possible problems:
+
+\begin{itemize}
+  \item UART or Python capture failure;
+  \item FSM sequencing failure;
+  \item RAM or BRAM readout failure.
+\end{itemize}
+
+The diagnostic packet contains known marker bytes such as \texttt{44 42} (ASCII \texttt{DB}) and \texttt{A5 5A C3 3C}. If these appear in the PC capture, then the FSM entered debug mode and the UART path is capable of carrying non-zero bytes.
+
+If diagnostic marker bytes are visible but the \texttt{rdata} fields remain \texttt{00 00}, then the evidence points away from UART/Python and toward the RAM output path, BRAM contents, or the \texttt{combined\_ram} interface behavior.
+
+An important alignment issue was also considered: in a full 16 KiB diagnostic capture, marker bytes can be searched explicitly using a deliberate marker such as \texttt{44 42}. For normal PUF streams, however, skipping initial zeros would be unsafe, because a real PUF response may legitimately start with zero bytes.
+
+\subsection{Final debugging observations}
+
+The most important debugging observation was that the diagnostic marker initially appeared as:
+
+\begin{center}
+\texttt{44 44 42 42}
+\end{center}
+
+instead of the intended:
+
+\begin{center}
+\texttt{44 42}
+\end{center}
+
+Since these bytes are constants generated by the debug case statement, this duplication could not be explained by RAM contents or address mapping. It indicated a UART transmit handshake problem: the same byte was effectively being transmitted twice.
+
+The fix was to change \texttt{uart\_tx\_enable} from a combinational state output into a registered one-clock pulse generated in the sequential FSM. After this change, the diagnostic stream started correctly with \texttt{44 42}, and the byte duplication disappeared.
+
+A temporary RAM writeback test was also used. With \texttt{DEBUG\_TEST\_WRITEBACK = 1}, the design wrote \texttt{16'hA5A5} into RAM while idle. Reading back \texttt{A5A5} proved that the \texttt{combined\_ram} read/write path and UART output path were functional. For the final PUF capture, this debug writeback was disabled:
+
+\begin{lstlisting}[style=verilogstyle]
+localparam DEBUG_TEST_WRITEBACK = 1'b0;
+\end{lstlisting}
+
+After disabling the writeback and power-cycling the board, the design produced non-constant, random-looking PUF data. The same behavior was also confirmed with the original \texttt{combined\_ram.v}, meaning that the final functional fix was in \texttt{puf\_module.v}, not in the provided RAM wrapper.
+
+\section{Build and BRAM Initialization Note}
+
+The assignment requires packing the bitstream in a way that avoids initializing BRAM to zero. The relevant \texttt{icepack} option is:
+
+\begin{lstlisting}[style=bashstyle]
+icepack -n top_level.asc top_level_noinit.bin
+\end{lstlisting}
+
+The \texttt{-n} option means ``skip initializing BRAM''. This is conceptually separate from \texttt{READ\_MODE} and \texttt{WRITE\_MODE} parameters in the RAM primitive. Those mode parameters configure RAM behavior; they do not by themselves mean that memory contents are initialized to zero.
+
+A typical manual build flow is:
+
+\begin{lstlisting}[style=bashstyle]
+yosys -q \
+  -L top_level_yosys.log \
+  -p "hierarchy -top top_level" \
+  -p "synth_ice40 -json top_level.json" \
+  rtl/top_level.v rtl/uart.v rtl/puf_module.v rtl/combined_ram.v
+
+nextpnr-ice40 -q \
+  --hx8k --package ct256 \
+  --freq 12 \
+  -l top_level_nextpnr.log \
+  --json top_level.json \
+  --pcf constraints/LatticeiCE40HX8K.pcf \
+  --pcf-allow-unconstrained \
+  --asc top_level.asc
+
+icetime -d hx8k -mtr top_level.rpt top_level.asc
+icepack -n top_level.asc top_level_noinit.bin
+iceprog -S top_level_noinit.bin
+\end{lstlisting}
+
+For convenience, the long build and capture commands were wrapped in local Makefile targets:
+
+\begin{lstlisting}[style=bashstyle]
+make alp-clean
+make alp-build
+make alp-program
+make alp-capture OUT=puf_data.txt
+make alp-check OUT=puf_data.txt
+\end{lstlisting}
+
+The combined one-step flow is:
+
+\begin{lstlisting}[style=bashstyle]
+make alp-run OUT=puf_data.txt
+make alp-check OUT=puf_data.txt
+\end{lstlisting}
+
+The diagnostic UART mode can be run with:
+
+\begin{lstlisting}[style=bashstyle]
+make alp-run REQUEST=d OUT=debug_packet_16k.txt
+\end{lstlisting}
+
+\section{Measurement and Analysis Notes}
+
+For final measurements, the temporary writeback mode must remain disabled. The board should be power-cycled between captures, because the SRAM/BRAM power-up state is the physical source of the PUF response.
+
+The collected files follow the model used in the task description:
+
+\begin{itemize}
+  \item one capture file corresponds to one power cycle;
+  \item each file contains 512 lines;
+  \item each line contains 64 hexadecimal characters, i.e. 256 bits;
+  \item the same line number across multiple captures corresponds to the same simulated PUF instance across different power cycles.
+\end{itemize}
+
+The analysis computes Uniformity, Bit-aliasing, Uniqueness, and Reliability on individual bits, not only on bytes. The measured average metrics were close to the expected SRAM PUF behavior: Uniformity, Bit-aliasing, and Uniqueness were close to the ideal 50\%, while Reliability was below the ideal 100\% due to unstable bits across power cycles.
+
+\section{Short Defense Summary}
+
+A concise explanation to a teaching assistant could be:
+
+\begin{quote}
+The module waits for a UART request byte. On \texttt{s}/\texttt{S}, it starts reading the SRAM/BRAM address space through \texttt{combined\_ram}. The RAM provides 16-bit words, but UART transmits 8-bit bytes, so I use \texttt{i\_r} as a byte counter: \texttt{i\_r[13:1]} becomes the RAM word address and \texttt{i\_r[0]} selects the low or high byte. The selected byte is first stored in \texttt{puf\_byte\_reg}, then sent through UART using a ready/enable handshake. \texttt{UART\_SEND} generates a registered one-clock \texttt{uart\_tx\_enable} pulse. Then \texttt{UART\_WAIT\_FINISH} first waits until the UART ready signal goes low, confirming that the byte was accepted, and only then waits for it to return high before the FSM continues. This loop repeats until 16384 bytes are transmitted, corresponding to 512 PUF instances of 256 bits each. The debug request mode and writeback mode were temporary tools used to separate UART/FSM issues from RAM readout issues.
+\end{quote}
+
+\end{document}

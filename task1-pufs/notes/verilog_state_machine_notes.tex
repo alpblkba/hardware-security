@@ -1,0 +1,560 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[a4paper,margin=2.35cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{amsmath}
+\usepackage{hyperref}
+\usepackage{titlesec}
+\usepackage{parskip}
+
+\definecolor{codegray}{rgb}{0.96,0.96,0.96}
+\definecolor{commentgreen}{rgb}{0.0,0.42,0.0}
+\definecolor{keywordblue}{rgb}{0.05,0.20,0.65}
+
+\lstdefinelanguage{Verilog}{
+  keywords={
+    module,endmodule,input,output,inout,wire,reg,always,begin,end,
+    if,else,case,endcase,default,parameter,localparam,assign,
+    posedge,negedge
+  },
+  keywordstyle=\color{keywordblue}\bfseries,
+  comment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  commentstyle=\color{commentgreen},
+  morestring=[b]",
+  stringstyle=\color{red},
+  sensitive=true
+}
+
+\lstset{
+  language=Verilog,
+  backgroundcolor=\color{codegray},
+  basicstyle=\ttfamily\small,
+  columns=fullflexible,
+  frame=single,
+  rulecolor=\color{black!25},
+  breaklines=true,
+  showstringspaces=false,
+  tabsize=4,
+  xleftmargin=0.5em,
+  xrightmargin=0.5em,
+  aboveskip=0.9em,
+  belowskip=0.9em
+}
+
+\setlist[itemize]{topsep=0.35em,itemsep=0.25em,parsep=0em}
+\setlist[enumerate]{topsep=0.35em,itemsep=0.25em,parsep=0em}
+
+\titleformat{\section}
+  {\normalfont\Large\bfseries}
+  {\thesection}{0.8em}{}
+
+\titleformat{\subsection}
+  {\normalfont\large\bfseries}
+  {\thesubsection}{0.8em}{}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=keywordblue,
+  urlcolor=keywordblue,
+  citecolor=keywordblue
+}
+
+\title{\textbf{Verilog State Machine Design Notes for the SRAM PUF Task}}
+\author{Practical Introduction to Hardware Security}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This note summarizes the structure and design rationale of the Verilog state machine used in the SRAM PUF task. The main purpose of the hardware design is to read the power-up state of FPGA block RAM, serialize the collected data over UART, and make it available to a host-side script for later statistical evaluation. The document focuses on the distinction between sequential and combinational logic, the relationship between RAM word addressing and UART byte transmission, and the implementation pattern of a small finite-state machine.
+\end{abstract}
+
+\section{Purpose of the PUF Readout Module}
+
+The hardware task is to extract a raw memory power-up pattern from the FPGA and transmit it to the host PC. The system can be understood as a bridge between two different interfaces:
+
+\begin{itemize}
+  \item a memory interface that returns 16-bit words, and
+  \item a UART interface that transmits 8-bit bytes.
+\end{itemize}
+
+The central module, \texttt{puf\_module.v}, therefore acts as a streaming adapter. It waits for a request from the host, reads consecutive memory words, splits each 16-bit word into two 8-bit values, and sends the resulting byte stream over UART.
+
+The intended data volume is:
+
+\[
+131072 \text{ bits} = 16384 \text{ bytes} = 8192 \text{ 16-bit RAM words}.
+\]
+
+Thus, the UART side performs 16384 byte transmissions, while the RAM side is addressed over 8192 16-bit words.
+
+\section{Important Signals}
+
+The most important signals in the PUF readout logic are shown below.
+
+\begin{lstlisting}
+reg  [13:0] i_r;          // byte read index
+reg  [12:0] raddr;        // RAM word address
+wire [15:0] rdata;        // RAM word data
+reg  [7:0]  puf_byte_reg; // selected byte for UART transmission
+\end{lstlisting}
+
+Their roles are summarized in Table~\ref{tab:signals}.
+
+\begin{table}[h]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Signal & Width & Meaning \\
+\midrule
+\texttt{i\_r} & 14 bits & Global byte index of the transmitted PUF stream \\
+\texttt{raddr} & 13 bits & Word address presented to the RAM interface \\
+\texttt{rdata} & 16 bits & Data word returned by the RAM interface \\
+\texttt{puf\_byte\_reg} & 8 bits & Selected byte that is held stable for UART TX \\
+\bottomrule
+\end{tabular}
+\caption{Core signals used by the PUF readout state machine.}
+\label{tab:signals}
+\end{table}
+
+The key point is that \texttt{i\_r} counts bytes, whereas \texttt{raddr} addresses 16-bit words. Since one 16-bit word contains two bytes, the RAM address is derived by discarding the least significant bit of the byte index:
+
+\begin{lstlisting}
+raddr = i_r[13:1];
+\end{lstlisting}
+
+The least significant bit, \texttt{i\_r[0]}, selects which half of the 16-bit word is currently transmitted:
+
+\begin{lstlisting}
+if (i_r[0] == 1'b0)
+    puf_byte_reg <= rdata[7:0];
+else
+    puf_byte_reg <= rdata[15:8];
+\end{lstlisting}
+
+This is equivalent to:
+
+\[
+\texttt{raddr} = \left\lfloor \frac{\texttt{i\_r}}{2} \right\rfloor,
+\qquad
+\texttt{byte\_select} = \texttt{i\_r} \bmod 2.
+\]
+
+\section{Byte Indexing and Word Addressing}
+
+The mapping between byte index, RAM address, and selected byte is shown in Table~\ref{tab:mapping}.
+
+\begin{table}[h]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Byte index \texttt{i\_r} & RAM word address \texttt{raddr} & Selected byte \\
+\midrule
+0 & 0 & \texttt{rdata[7:0]} \\
+1 & 0 & \texttt{rdata[15:8]} \\
+2 & 1 & \texttt{rdata[7:0]} \\
+3 & 1 & \texttt{rdata[15:8]} \\
+4 & 2 & \texttt{rdata[7:0]} \\
+5 & 2 & \texttt{rdata[15:8]} \\
+\(\cdots\) & \(\cdots\) & \(\cdots\) \\
+16382 & 8191 & \texttt{rdata[7:0]} \\
+16383 & 8191 & \texttt{rdata[15:8]} \\
+\bottomrule
+\end{tabular}
+\caption{Mapping from byte-level UART stream indexing to 16-bit RAM word addressing.}
+\label{tab:mapping}
+\end{table}
+
+This table is useful because it separates three concepts that are easy to confuse:
+
+\begin{itemize}
+  \item \texttt{i\_r} is not RAM data; it is a byte counter controlled by the state machine.
+  \item \texttt{raddr} is not payload data; it is an address sent to the RAM.
+  \item \texttt{rdata} is not address metadata; it is the actual 16-bit memory content returned by RAM.
+\end{itemize}
+
+\section{Sequential and Combinational Logic}
+
+A clean Verilog state machine is commonly divided into two kinds of logic:
+
+\begin{enumerate}
+  \item sequential logic, which updates registers on a clock edge, and
+  \item combinational logic, which derives outputs from the current state and current register values.
+\end{enumerate}
+
+\subsection{Sequential Logic}
+
+Sequential logic is written using an edge-sensitive \texttt{always} block:
+
+\begin{lstlisting}
+always @(posedge clk or posedge rst) begin
+    if (rst) begin
+        state <= INIT;
+        i_r <= 14'd0;
+        puf_byte_reg <= 8'd0;
+    end else begin
+        case (state)
+            // state transitions and register updates
+        endcase
+    end
+end
+\end{lstlisting}
+
+This block describes registers. Signals assigned inside this block retain their values across clock cycles. In this task, typical sequential signals include:
+
+\begin{itemize}
+  \item the current state,
+  \item the byte index \texttt{i\_r},
+  \item the optional write index \texttt{i\_w\_r}, and
+  \item the selected byte register \texttt{puf\_byte\_reg}.
+\end{itemize}
+
+A useful question for sequential logic is:
+
+\begin{quote}
+What information must be remembered after the next clock edge?
+\end{quote}
+
+\subsection{Combinational Logic}
+
+Combinational logic is written using \texttt{always @(*)}:
+
+\begin{lstlisting}
+always @(*) begin
+    uart_tx_enable = 1'b0;
+    uart_data_to_tx = puf_byte_reg;
+
+    raddr = i_r[13:1];
+
+    we = 1'b0;
+    waddr = 13'd0;
+    wdata = 16'd0;
+    wmask = 16'd0;
+
+    case (state)
+        UART_SEND: begin
+            uart_tx_enable = 1'b1;
+        end
+    endcase
+end
+\end{lstlisting}
+
+This block describes logic that reacts immediately to the current values of its inputs and registers. It should not be used to store state. In this task, typical combinational outputs include:
+
+\begin{itemize}
+  \item \texttt{uart\_tx\_enable},
+  \item \texttt{uart\_data\_to\_tx},
+  \item \texttt{raddr},
+  \item \texttt{we},
+  \item \texttt{waddr},
+  \item \texttt{wdata}, and
+  \item \texttt{wmask}.
+\end{itemize}
+
+A useful question for combinational logic is:
+
+\begin{quote}
+Given the current state and current registers, what should the output wires be right now?
+\end{quote}
+
+\section{Assignment Style}
+
+A practical Verilog convention is:
+
+\begin{itemize}
+  \item use nonblocking assignments, \texttt{<=}, in sequential blocks;
+  \item use blocking assignments, \texttt{=}, in combinational blocks.
+\end{itemize}
+
+Sequential example:
+
+\begin{lstlisting}
+always @(posedge clk) begin
+    state <= NEXT_STATE;
+    i_r <= i_r + 1'b1;
+end
+\end{lstlisting}
+
+Combinational example:
+
+\begin{lstlisting}
+always @(*) begin
+    raddr = i_r[13:1];
+    uart_data_to_tx = puf_byte_reg;
+end
+\end{lstlisting}
+
+The distinction helps avoid simulation and synthesis mismatches and makes the design intent clearer.
+
+\section{Default Assignments}
+
+In combinational logic, outputs should be given default values before state-specific overrides. Otherwise, unintended latches can be inferred.
+
+Poor style:
+
+\begin{lstlisting}
+always @(*) begin
+    case (state)
+        UART_SEND:
+            uart_tx_enable = 1'b1;
+    endcase
+end
+\end{lstlisting}
+
+Improved style:
+
+\begin{lstlisting}
+always @(*) begin
+    uart_tx_enable = 1'b0;
+
+    case (state)
+        UART_SEND:
+            uart_tx_enable = 1'b1;
+    endcase
+end
+\end{lstlisting}
+
+In the PUF readout task, the RAM write-enable signal should normally be disabled:
+
+\begin{lstlisting}
+we = 1'b0;
+\end{lstlisting}
+
+This is important because the design is supposed to read the RAM power-up state. Writing into memory would overwrite the physical state that is being measured.
+
+\section{State Machine Structure}
+
+The state machine can be described as:
+
+\begin{verbatim}
+INIT
+  |
+  v
+WAIT_FOR_REQUEST
+  |
+  | host sends 's'
+  v
+WAITCYCLE_FOR_MEMORY
+  |
+  v
+PUF_READ
+  |
+  v
+UART_SEND
+  |
+  v
+UART_WAIT_FINISH
+  |
+  v
+LOOP_CONDITION
+  |
+  | if more bytes remain
+  v
+WAITCYCLE_FOR_MEMORY
+\end{verbatim}
+
+Each state has a small and specific responsibility.
+
+\subsection{\texttt{INIT}}
+
+The initialization state brings the state machine into a known condition after reset. It may also be used to send or flush dummy UART data, depending on the provided template.
+
+Typical responsibilities:
+
+\begin{itemize}
+  \item initialize counters and registers,
+  \item set the next state to \texttt{WAIT\_FOR\_REQUEST}, and
+  \item avoid starting a memory readout before the host asks for it.
+\end{itemize}
+
+\subsection{\texttt{WAIT\_FOR\_REQUEST}}
+
+This state waits until the host sends the request byte, typically \texttt{'s'} or \texttt{'S'}.
+
+\begin{lstlisting}
+WAIT_FOR_REQUEST: begin
+    i_r <= 14'd0;
+
+    if (uart_rx_ready &&
+       (uart_data_from_rx == "s" || uart_data_from_rx == "S")) begin
+        state <= WAITCYCLE_FOR_MEMORY;
+    end
+end
+\end{lstlisting}
+
+Resetting \texttt{i\_r} here ensures that every new capture starts from byte index 0.
+
+\subsection{\texttt{WAITCYCLE\_FOR\_MEMORY}}
+
+This state gives the synchronous RAM interface one clock cycle to update \texttt{rdata} after \texttt{raddr} is driven.
+
+\begin{lstlisting}
+WAITCYCLE_FOR_MEMORY: begin
+    state <= PUF_READ;
+end
+\end{lstlisting}
+
+This state is a hardware timing detail. In software, memory reads often appear instantaneous. In synchronous hardware, the address and the returned data are separated by clock cycles.
+
+\subsection{\texttt{PUF\_READ}}
+
+This state selects one 8-bit byte from the 16-bit RAM word.
+
+\begin{lstlisting}
+PUF_READ: begin
+    if (i_r[0] == 1'b0)
+        puf_byte_reg <= rdata[7:0];
+    else
+        puf_byte_reg <= rdata[15:8];
+
+    if (uart_tx_ready)
+        state <= UART_SEND;
+end
+\end{lstlisting}
+
+The selected byte is stored in \texttt{puf\_byte\_reg} so that it remains stable while the UART transmitter consumes it.
+
+\subsection{\texttt{UART\_SEND}}
+
+This state starts one UART transmission. The enable signal should normally be asserted for one clock cycle.
+
+Sequential part:
+
+\begin{lstlisting}
+UART_SEND: begin
+    state <= UART_WAIT_FINISH;
+end
+\end{lstlisting}
+
+Combinational part:
+
+\begin{lstlisting}
+always @(*) begin
+    uart_tx_enable = 1'b0;
+
+    case (state)
+        UART_SEND:
+            uart_tx_enable = 1'b1;
+    endcase
+end
+\end{lstlisting}
+
+The purpose of this state is not to wait for the whole byte to be transmitted. It only starts the transmission.
+
+\subsection{\texttt{UART\_WAIT\_FINISH}}
+
+UART transmission is slow compared to the FPGA clock. At 115200 baud, one byte frame typically contains ten bits:
+
+\[
+1 \text{ start bit} + 8 \text{ data bits} + 1 \text{ stop bit} = 10 \text{ bits}.
+\]
+
+Thus, one byte takes approximately:
+
+\[
+\frac{10}{115200} \approx 86.8 \mu s.
+\]
+
+With a 12 MHz FPGA clock, this corresponds to roughly:
+
+\[
+12\,000\,000 \times 86.8 \mu s \approx 1041
+\]
+
+clock cycles.
+
+Therefore, the state machine waits until the UART transmitter is ready again:
+
+\begin{lstlisting}
+UART_WAIT_FINISH: begin
+    if (uart_tx_ready)
+        state <= LOOP_CONDITION;
+end
+\end{lstlisting}
+
+\subsection{\texttt{LOOP\_CONDITION}}
+
+This state checks whether all bytes have been transmitted.
+
+\begin{lstlisting}
+LOOP_CONDITION: begin
+    if (i_r == PUF_BYTES - 1) begin
+        state <= WAIT_FOR_REQUEST;
+    end else begin
+        i_r <= i_r + 1'b1;
+        state <= WAITCYCLE_FOR_MEMORY;
+    end
+end
+\end{lstlisting}
+
+Since byte indexing starts from 0, the final byte has index:
+
+\[
+16384 - 1 = 16383.
+\]
+
+\section{Suggested Debugging Strategy}
+
+A useful implementation strategy is to first verify the UART streaming path before using real RAM data.
+
+\subsection{Step 1: Dummy Stream}
+
+Instead of selecting from \texttt{rdata}, transmit a known pattern:
+
+\begin{lstlisting}
+puf_byte_reg <= i_r[7:0];
+\end{lstlisting}
+
+If the host script successfully receives 16384 bytes and writes 512 lines of 64 hex characters, then the UART streaming path works.
+
+\subsection{Step 2: Real RAM Readout}
+
+After the byte streaming path is verified, replace the dummy pattern with real RAM data:
+
+\begin{lstlisting}
+if (i_r[0] == 1'b0)
+    puf_byte_reg <= rdata[7:0];
+else
+    puf_byte_reg <= rdata[15:8];
+\end{lstlisting}
+
+\subsection{Step 3: Disable BRAM Initialization}
+
+For an SRAM PUF, the memory power-up state must not be overwritten by deterministic initialization. Therefore, the bitstream packing step must be adjusted so that BRAM is not initialized to zero.
+
+\section{Implementation Checklist}
+
+Before considering the state machine complete, verify the following:
+
+\begin{itemize}
+  \item reset initializes the state machine and relevant registers;
+  \item a new request resets the byte counter;
+  \item \texttt{raddr} is derived from \texttt{i\_r[13:1]};
+  \item \texttt{i\_r[0]} selects lower or upper byte from \texttt{rdata};
+  \item RAM write enable remains disabled;
+  \item \texttt{uart\_tx\_enable} is asserted only as a short transmission-start pulse;
+  \item the machine waits for \texttt{uart\_tx\_ready} before sending the next byte;
+  \item byte transmission stops after \texttt{PUF\_BYTES - 1};
+  \item the host script receives exactly 16384 bytes;
+  \item the output file contains 512 lines with 64 hexadecimal characters per line.
+\end{itemize}
+
+\section{Summary}
+
+The PUF readout module is best understood as a bridge between a 16-bit parallel memory interface and an 8-bit UART interface. The byte counter \texttt{i\_r} tracks progress through the output stream. The RAM address \texttt{raddr} is derived from the upper bits of this counter, while the least significant bit chooses the lower or upper byte of the 16-bit \texttt{rdata} word.
+
+The central design principle is to separate registered state from combinational outputs. State, counters, and stored bytes belong in the clocked block. Output enables, RAM addresses, and default interface values belong in the combinational block. This separation makes the design easier to reason about, easier to debug, and closer to the hardware structure that will be synthesized.
+
+\end{document}
