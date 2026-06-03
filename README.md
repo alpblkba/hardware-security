@@ -1,4 +1,15 @@
-## Tasks
+# Hardware security labs
+
+FPGA-based hardware security labs and experiments using Lattice iCE40HX8K, Verilog, Yosys, and nextpnr.
+
+## Environment
+
+- Lattice iCE40HX8K
+- Verilog HDL
+- Yosys
+- nextpnr
+- iceprog
+- Python UART toolings
 
 ### Task 0 — FPGA bring-up and UART
 
