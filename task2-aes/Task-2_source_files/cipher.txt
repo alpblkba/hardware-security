@@ -1,0 +1,20 @@
+aes_state byte layout
+
+byte i = aes_state[8*i +: 8]
+
+byte0  = s00
+byte1  = s10
+byte2  = s20
+byte3  = s30
+byte4  = s01
+byte5  = s11
+byte6  = s21
+byte7  = s31
+byte8  = s02
+byte9  = s12
+byte10 = s22
+byte11 = s32
+byte12 = s03
+byte13 = s13
+byte14 = s23
+byte15 = s33

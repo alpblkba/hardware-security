@@ -1,0 +1,9 @@
+[timestart] 0
+[pos] 277 183
+*-14 0 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+[treeopen] top_level.
+[signals_width] 50
+@28
+top_level.CLK
+[pattern_trace] 1
+[pattern_trace] 0
