@@ -48,7 +48,7 @@ $(TOPLEVEL).json: $(VERILOG_FILES)
 	-p "hierarchy -top ${TOPLEVEL}" \
 	-p "synth_ice40 ${YOSYS_OPTIONS} -json ${TOPLEVEL}.json" \
 	$(VERILOG_FILES)
-	@cat "${TOPLEVEL}_yosys.log" |grep "Number of cells:"
+	@grep -E "SB_LUT4|SB_RAM40_4K|Number of cells" "${TOPLEVEL}_yosys.log" || true
 	@echo "FPGA (HX8K) maximum available number of cells: 7680"
 
 %.asc: %.json $(PCF)
@@ -63,10 +63,11 @@ $(TOPLEVEL).json: $(VERILOG_FILES)
 	icepack $< $@
 
 %.rpt: %.asc
-	icetime -d $(DEVICE) -mtr $@ $< -r ${TOPLEVEL}_icetime.log
+	icetime -d $(DEVICE) -m -t -r ${TOPLEVEL}_icetime.log $<
+	@cp ${TOPLEVEL}_icetime.log $@
 
 report-info: $(TOPLEVEL).rpt $(TOPLEVEL)_nextpnr.log $(TOPLEVEL)_yosys.log
-	@cat ${TOPLEVEL}_yosys.log |grep "Number of cells:"
+	@grep -E "SB_LUT4|SB_RAM40_4K|Number of cells" ${TOPLEVEL}_yosys.log || true
 	@cat ${TOPLEVEL}_nextpnr.log |grep "ICESTORM_LC:"
 	@cat ${TOPLEVEL}_icetime.log |grep "Total path delay:"
 

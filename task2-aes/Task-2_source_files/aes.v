@@ -11,6 +11,7 @@ module aes(clk, rst, din, keyin, dout, done);
 	// State machine register for the different encryption stages
 	parameter IDLE=3'b000, SUB_BYTES=3'b001, SHIFT_ROWS=3'b010, MIX_COLUMNS=3'b011, KEY_SCHED=3'b100, KEY_ADD=3'b101, DONE=3'b110;
 	reg [2:0] fsm_state;
+	reg [2:0] prev_fsm_state;
 	
 	reg [127:0] aes_state; // The AES state, this has nothing to do with the state machine
 	reg [127:0] key; // The current AES round key
@@ -45,6 +46,7 @@ module aes(clk, rst, din, keyin, dout, done);
 	always @(posedge clk, posedge rst) begin
 		if (rst) begin
 			fsm_state <= IDLE;
+			prev_fsm_state <= IDLE;
 			aes_state <= 128'b0;
 			round <= 4'b0;
 			subbytes_ena <= 1'b0;
@@ -53,6 +55,7 @@ module aes(clk, rst, din, keyin, dout, done);
 			keysched_ena <= 1'b0;
 			done <= 1'b0;
 		end else begin
+			prev_fsm_state <= fsm_state;
 			case (fsm_state)
 				IDLE: begin
 					done <= 1'b0;
@@ -114,19 +117,20 @@ module aes(clk, rst, din, keyin, dout, done);
 					end
 				end
 				KEY_ADD: begin
-					// TODO: Add the round key
-					// ???
-					
-									
-					// we are at the last round, go to DONE to signal completion, otherwise increment the round and go to subbytes again
+					// AddRoundKey: xor the current AES state with the current round key.
+					// Guard prevents double-xor if KEY_ADD is held for more than one cycle.
+					if (prev_fsm_state != KEY_ADD) begin
+						aes_state <= aes_state ^ key;
+					end
+
 					if (round == 4'd10) begin
 						fsm_state <= DONE;
 					end else begin
 						round <= round + 1'b1;
 						fsm_state <= SUB_BYTES;
-					end 
+					end
 				end
-				DONE: begin
+					DONE: begin
 					// Encryption completed, wait for reset
 					done <= 1'b1;
 					round <= 4'd0;
