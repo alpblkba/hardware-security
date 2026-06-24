@@ -97,5 +97,42 @@ clean:
 	-rm -R ./__pycache__
 	-rm -R ./sim_build
 
-.SECONDARY:
-.PHONY: all prog clean
+# macOS/local verification helpers
+# Simulation uses Homebrew Icarus Verilog because cocotb/Python embedding is more stable there.
+# FPGA build/programming uses oss-cad-suite for yosys, nextpnr, icetime, icepack, and iceprog.
+
+OSS_CAD_BIN ?= $(HOME)/Documents/tools/oss-cad-suite/bin
+HOMEBREW_BIN ?= /opt/homebrew/bin
+UART_PORT ?= /dev/cu.usbserial-21401
+VENV ?= .venv-cocotb
+
+.PHONY: sim-macos
+sim-macos:
+	@echo "running cocotb simulation with Homebrew Icarus Verilog"
+	@echo "using ICARUS_BIN_DIR=$(HOMEBREW_BIN)"
+	@PYGPI_PYTHON_BIN="$$(pwd)/$(VENV)/bin/python3" \
+	LIBPYTHON_LOC="$$($(VENV)/bin/python3 - <<'PY'\nimport sysconfig\nprint(sysconfig.get_config_var('LIBDIR') + '/libpython' + sysconfig.get_config_var('LDVERSION') + '.dylib')\nPY\n)" \
+	ICARUS_BIN_DIR=$(HOMEBREW_BIN) \
+	$(MAKE) sim
+
+.PHONY: build-macos
+build-macos:
+	@echo "running fpga build with oss-cad-suite"
+	@PATH="$(OSS_CAD_BIN):/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+	$(MAKE) all
+	@PATH="$(OSS_CAD_BIN):/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+	$(MAKE) report-info
+
+.PHONY: prog-macos
+prog-macos:
+	@echo "programming fpga with oss-cad-suite"
+	@PATH="$(OSS_CAD_BIN):/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+	$(MAKE) prog
+
+.PHONY: board-test
+board-test:
+	@echo "running uart board test on $(UART_PORT)"
+	@DEV_UART=$(UART_PORT) $(VENV)/bin/python3 check_aes.py
+
+.PHONY: verify-macos
+verify-macos: clean sim-macos build-macos prog-macos board-test

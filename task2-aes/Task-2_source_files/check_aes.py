@@ -7,7 +7,41 @@ import time
 import serial.tools.list_ports
 
 # Edit UART device if necessary
-DEV_UART = '/dev/ttyUSB1'
+# Edit UART device if necessary.
+# Override manually with:
+#   DEV_UART=/dev/cu.usbserial-21400 python3 check_aes.py
+DEV_UART = os.environ.get("DEV_UART")
+
+if DEV_UART is None:
+    ports = [p.device for p in serial.tools.list_ports.comports()]
+
+    preferred = [
+        p for p in ports
+        if (
+            p.startswith("/dev/cu.usbserial")
+            or p.startswith("/dev/cu.usbmodem")
+            or p.startswith("/dev/ttyUSB")
+            or p.startswith("/dev/ttyACM")
+        )
+    ]
+
+    if len(preferred) == 1:
+        DEV_UART = preferred[0]
+    elif len(preferred) > 1:
+        print("Multiple candidate UART devices found:")
+        for p in preferred:
+            print("  " + p)
+        print("Please choose one, for example:")
+        print(f"  DEV_UART={preferred[0]} python3 check_aes.py")
+        sys.exit(1)
+    else:
+        print("No UART device found.")
+        print("Available serial ports:")
+        for p in ports:
+            print("  " + p)
+        sys.exit(1)
+
+print("Using UART device:", DEV_UART)
 
 # separate memory into how many blocks
 # (in powers of 2)
