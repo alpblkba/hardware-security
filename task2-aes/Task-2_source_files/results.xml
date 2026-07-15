@@ -1,11 +1,11 @@
 <testsuites name="results">
   <testsuite name="all" package="all">
-    <property name="random_seed" value="1782336831" />
-    <testcase name="check_full_encryption" classname="testbench" file="/Users/alpblkba/Documents/GitHub/hardware-security/task2-aes/Task-2_source_files/testbench.py" lineno="61" time="0.00994110107421875" sim_time_ns="109.0" ratio_time="10964.580199539525" />
-    <testcase name="check_subbytes" classname="testbench" file="/Users/alpblkba/Documents/GitHub/hardware-security/task2-aes/Task-2_source_files/testbench.py" lineno="98" time="0.0005807876586914062" sim_time_ns="3.0" ratio_time="5165.399014778325" />
-    <testcase name="check_shiftrow" classname="testbench" file="/Users/alpblkba/Documents/GitHub/hardware-security/task2-aes/Task-2_source_files/testbench.py" lineno="137" time="0.0005009174346923828" sim_time_ns="3.0" ratio_time="5989.010947168015" />
-    <testcase name="check_mixcolumns" classname="testbench" file="/Users/alpblkba/Documents/GitHub/hardware-security/task2-aes/Task-2_source_files/testbench.py" lineno="175" time="0.0006849765777587891" sim_time_ns="6.0" ratio_time="8759.42359902541" />
-    <testcase name="check_keysched" classname="testbench" file="/Users/alpblkba/Documents/GitHub/hardware-security/task2-aes/Task-2_source_files/testbench.py" lineno="212" time="0.001936197280883789" sim_time_ns="11.999999999999986" ratio_time="6197.71555227188" />
-    <testcase name="check_addkey" classname="testbench" file="/Users/alpblkba/Documents/GitHub/hardware-security/task2-aes/Task-2_source_files/testbench.py" lineno="252" time="0.0006241798400878906" sim_time_ns="5.0" ratio_time="8010.511841100077" />
+    <property name="random_seed" value="1783528078" />
+    <testcase name="check_full_encryption" classname="testbench" file="/Users/alpblkba/Documents/GitHub/hardware-security/task2-aes/Task-2_source_files/testbench.py" lineno="61" time="0.013745784759521484" sim_time_ns="109.0" ratio_time="7929.703680577237" />
+    <testcase name="check_subbytes" classname="testbench" file="/Users/alpblkba/Documents/GitHub/hardware-security/task2-aes/Task-2_source_files/testbench.py" lineno="98" time="0.0007970333099365234" sim_time_ns="3.0" ratio_time="3763.958121447801" />
+    <testcase name="check_shiftrow" classname="testbench" file="/Users/alpblkba/Documents/GitHub/hardware-security/task2-aes/Task-2_source_files/testbench.py" lineno="137" time="0.0006990432739257812" sim_time_ns="3.0" ratio_time="4291.579809004093" />
+    <testcase name="check_mixcolumns" classname="testbench" file="/Users/alpblkba/Documents/GitHub/hardware-security/task2-aes/Task-2_source_files/testbench.py" lineno="175" time="0.0007617473602294922" sim_time_ns="6.0" ratio_time="7876.627230046948" />
+    <testcase name="check_keysched" classname="testbench" file="/Users/alpblkba/Documents/GitHub/hardware-security/task2-aes/Task-2_source_files/testbench.py" lineno="212" time="0.0024352073669433594" sim_time_ns="11.999999999999986" ratio_time="4927.711768161342" />
+    <testcase name="check_addkey" classname="testbench" file="/Users/alpblkba/Documents/GitHub/hardware-security/task2-aes/Task-2_source_files/testbench.py" lineno="252" time="0.0006930828094482422" sim_time_ns="5.0" ratio_time="7214.145166838665" />
   </testsuite>
 </testsuites>

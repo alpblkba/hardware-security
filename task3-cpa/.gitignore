@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# macOS / editors
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Temporary and backup files
+*.bak
+*.tmp
+*.pid
+
+# FPGA generated build artifacts
+*.asc
+*.bin
+*.json
+*.rpt
+*.blif
+*.edif
+
+# FPGA/build logs
+build.log
+full_build.log
+*_yosys.log
+*_nextpnr.log
+*_icetime.log
+task3_100k.log
+
+# Generated submission packages
+submission/
+task3-cpa_alp_bolukbasi_2710518/
+task3-cpa_alp_bolukbasi_2710518.zip
+*.zip
